@@ -1,0 +1,26 @@
+# Runtime & dependency caches
+node_modules
+bun.lockb
+
+# Environment files
+.env
+.env.*
+
+# Build outputs & logs
+dist
+build
+coverage
+*.log
+
+# Editor & OS metadata
+.DS_Store
+*.swp
+*.swo
+.idea
+.vscode
+
+# Docker artifacts
+*.tar
+
+# Misc
+tmp

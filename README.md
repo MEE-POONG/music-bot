@@ -6,6 +6,7 @@ This project bundles a simple HTTP control plane built with [Elysia](https://ely
 - Minimal REST API (`/music` namespace) to play, skip, stop, and inspect the queue
 - Discord voice playback backed by Lavalink v4 พร้อม Slash Commands (`/play`, `/skip`, `/stop`, `/queue`)
 - Music Dashboard สวยงามบน Discord: แสดง Embed สถานะเพลงพร้อมปุ่มควบคุม (Pause/Resume, Skip, Stop, Refresh)
+- ระบบ Autoplay อัจฉริยะ เลือกเพลงต่ออัตโนมัติตามแนวเพลงกว่า 20 หมวด พร้อมตัวกรองคุณภาพและ fallback อัตโนมัติ
 - Docker Compose environment that boots both the bot (Bun image) and Lavalink (Java 17+)
 - TypeScript-first project structure with strict runtime configuration validation
 
@@ -15,6 +16,7 @@ This project bundles a simple HTTP control plane built with [Elysia](https://ely
 3. Copy `.env.example` to `.env` and fill in:
    - `DISCORD_TOKEN`
    - `DISCORD_CLIENT_ID`
+   - `DJ_ROLE_IDS` (optionallyกำหนด role ที่ถือสิทธิ์ DJ เพิ่มเติม แยกด้วยคอมมา)
    - Optionally override Lavalink host/port/password if you need custom values.
 
 #### Deploy slash commands
