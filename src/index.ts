@@ -13,9 +13,8 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from "discord.js";
-import type { ChatInputCommandInteraction, Guild, User } from "discord.js";
+import type { ChatInputCommandInteraction, Client, Guild, User } from "discord.js";
 import { config } from "./config";
-import { createDiscordClient } from "./discord/client";
 import { musicRoutes } from "./routes/music";
 import {
   AUTOPLAY_GENRE_LABELS,
@@ -26,9 +25,10 @@ import {
   type LoopMode,
   type QueueRequester
 } from "./services/musicService";
+import { BotManager } from "./lib/botManager";
 
-const client = createDiscordClient();
-const musicService = new MusicService(client, config);
+// สร้าง BotManager instance
+const botManager = new BotManager(config, (client, cfg) => new MusicService(client, cfg));
 
 const ControlButtons = {
   TOGGLE_PAUSE: "music:control:toggle_pause",
@@ -53,81 +53,102 @@ const ModalFieldIds = {
 
 const MODAL_CONTEXT_SEPARATOR = "::";
 
-client.once("clientReady", () => {
-  if (!client.user) return;
-  console.log(
-    `[Discord] Logged in as ${client.user.tag} (${client.user.id}) and ready to play music`
-  );
-});
+// Initialize all bots
+await botManager.initialize();
 
-client.on("error", (error) => {
-  console.error("[Discord] Client error", error);
-});
+// Setup interaction handlers for each bot
+for (const bot of botManager.getAllBots()) {
+  setupInteractionHandlers(bot.client, bot.musicService);
+}
 
-client.on("interactionCreate", async (interaction) => {
-  if (interaction.isChatInputCommand()) {
-    if (!interaction.guildId || !interaction.guild) {
-      await replySafely(interaction, {
-        content: "คำสั่งนี้ใช้ได้เฉพาะภายในเซิร์ฟเวอร์",
-        flags: "Ephemeral"
-      });
+// Setup interaction handlers
+function setupInteractionHandlers(client: Client, musicService: MusicService) {
+  client.on("interactionCreate", async (interaction) => {
+    if (interaction.isChatInputCommand()) {
+      if (!interaction.guildId || !interaction.guild) {
+        await replySafely(interaction, {
+          content: "คำสั่งนี้ใช้ได้เฉพาะภายในเซิร์ฟเวอร์",
+          flags: "Ephemeral"
+        });
+        return;
+      }
+
+      try {
+        await handleSlashCommand(interaction, musicService, client);
+      } catch (error) {
+        console.error("[Discord] Slash command error", error);
+        await replySafely(interaction, {
+          content: "เกิดข้อผิดพลาดขณะประมวลคำสั่ง ลองอีกครั้งภายหลัง",
+          flags: "Ephemeral"
+        });
+      }
       return;
     }
 
-    try {
-      await handleSlashCommand(interaction);
-    } catch (error) {
-      console.error("[Discord] Slash command error", error);
-      await replySafely(interaction, {
-        content: "เกิดข้อผิดพลาดขณะประมวลคำสั่ง ลองอีกครั้งภายหลัง",
-        flags: "Ephemeral"
-      });
+    if (interaction.isButton()) {
+      try {
+        await handleControlButton(interaction, musicService, client);
+      } catch (error) {
+        console.error("[Discord] Button interaction error", error);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: "เกิดข้อผิดพลาดในการใช้งานปุ่ม",
+            flags: "Ephemeral"
+          });
+        }
+      }
+      return;
     }
-    return;
-  }
 
-  if (interaction.isButton()) {
-    try {
-      await handleControlButton(interaction);
-    } catch (error) {
-      console.error("[Discord] Button interaction error", error);
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: "เกิดข้อผิดพลาดในการใช้งานปุ่ม",
-          flags: "Ephemeral"
-        });
+    if (interaction.isModalSubmit()) {
+      try {
+        await handleModalSubmit(interaction, musicService, client);
+      } catch (error) {
+        console.error("[Discord] Modal interaction error", error);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: "ไม่สามารถประมวลผลข้อมูลที่ส่งมาได้",
+            flags: "Ephemeral"
+          });
+        }
       }
     }
-    return;
-  }
-
-  if (interaction.isModalSubmit()) {
-    try {
-      await handleModalSubmit(interaction);
-    } catch (error) {
-      console.error("[Discord] Modal interaction error", error);
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: "ไม่สามารถประมวลผลข้อมูลที่ส่งมาได้",
-          flags: "Ephemeral"
-        });
-      }
-    }
-  }
-});
+  });
+}
 
 process.on("unhandledRejection", (reason) => {
   console.error("[Runtime] Unhandled promise rejection:", reason);
 });
 
-await client.login(config.DISCORD_TOKEN);
+process.on("SIGINT", async () => {
+  console.log("\n[Runtime] Shutting down gracefully...");
+  await botManager.shutdown();
+  process.exit(0);
+});
 
+process.on("SIGTERM", async () => {
+  console.log("\n[Runtime] Shutting down gracefully...");
+  await botManager.shutdown();
+  process.exit(0);
+});
+
+// Start HTTP server with all music services
+const allMusicServices = botManager.getAllBots().map((bot) => bot.musicService);
 const app = new Elysia()
   .get("/health", () => ({
     status: "ok",
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    activeBots: botManager.getAllBots().length
   }))
-  .use(musicRoutes(musicService))
+  .get("/bots", () => ({
+    bots: botManager.getAllBots().map((bot) => ({
+      name: bot.name,
+      clientId: bot.clientId,
+      guilds: bot.client.guilds.cache.size,
+      users: bot.client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0)
+    }))
+  }))
+  .use(musicRoutes(allMusicServices[0] ?? null)) // Use first bot's service as fallback
   .listen(config.APP_PORT);
 
 console.log(
@@ -147,19 +168,23 @@ async function replySafely(
   }
 }
 
-async function handleSlashCommand(interaction: ChatInputCommandInteraction) {
+async function handleSlashCommand(
+  interaction: ChatInputCommandInteraction,
+  musicService: MusicService,
+  client: Client
+) {
   switch (interaction.commandName) {
     case "play":
-      await handlePlay(interaction);
+      await handlePlay(interaction, musicService, client);
       break;
     case "skip":
-      await handleSkip(interaction);
+      await handleSkip(interaction, musicService, client);
       break;
     case "stop":
-      await handleStop(interaction);
+      await handleStop(interaction, musicService, client);
       break;
     case "queue":
-      await handleQueue(interaction);
+      await handleQueue(interaction, musicService, client);
       break;
     default:
       await replySafely(interaction, {
@@ -182,7 +207,11 @@ async function resolveMember(
   }
 }
 
-async function handlePlay(interaction: ChatInputCommandInteraction) {
+async function handlePlay(
+  interaction: ChatInputCommandInteraction,
+  musicService: MusicService,
+  client: Client
+) {
   await interaction.deferReply();
 
   const member =
@@ -216,7 +245,9 @@ async function handlePlay(interaction: ChatInputCommandInteraction) {
 
     const presentation = buildQueuePresentation(
       interaction.guildId!,
-      interaction.guild
+      interaction.guild,
+      musicService,
+      client
     );
 
     await interaction.editReply({
@@ -238,7 +269,11 @@ async function handlePlay(interaction: ChatInputCommandInteraction) {
   }
 }
 
-async function handleSkip(interaction: ChatInputCommandInteraction) {
+async function handleSkip(
+  interaction: ChatInputCommandInteraction,
+  musicService: MusicService,
+  client: Client
+) {
   const queue = musicService.getQueue(interaction.guildId!);
   if (!queue || !queue.current) {
     await replySafely(interaction, {
@@ -259,7 +294,9 @@ async function handleSkip(interaction: ChatInputCommandInteraction) {
   await musicService.skip(interaction.guildId!);
   const presentation = buildQueuePresentation(
     interaction.guildId!,
-    interaction.guild
+    interaction.guild,
+    musicService,
+    client
   );
 
   await replySafely(interaction, {
@@ -269,7 +306,11 @@ async function handleSkip(interaction: ChatInputCommandInteraction) {
   });
 }
 
-async function handleStop(interaction: ChatInputCommandInteraction) {
+async function handleStop(
+  interaction: ChatInputCommandInteraction,
+  musicService: MusicService,
+  client: Client
+) {
   const queue = musicService.getQueue(interaction.guildId!);
   if (!queue) {
     await replySafely(interaction, {
@@ -282,7 +323,9 @@ async function handleStop(interaction: ChatInputCommandInteraction) {
   await musicService.stop(interaction.guildId!);
   const presentation = buildQueuePresentation(
     interaction.guildId!,
-    interaction.guild
+    interaction.guild,
+    musicService,
+    client
   );
 
   await replySafely(interaction, {
@@ -292,10 +335,16 @@ async function handleStop(interaction: ChatInputCommandInteraction) {
   });
 }
 
-async function handleQueue(interaction: ChatInputCommandInteraction) {
+async function handleQueue(
+  interaction: ChatInputCommandInteraction,
+  musicService: MusicService,
+  client: Client
+) {
   const presentation = buildQueuePresentation(
     interaction.guildId!,
-    interaction.guild
+    interaction.guild,
+    musicService,
+    client
   );
 
   await replySafely(interaction, {
@@ -304,7 +353,11 @@ async function handleQueue(interaction: ChatInputCommandInteraction) {
   });
 }
 
-async function handleControlButton(interaction: ButtonInteraction) {
+async function handleControlButton(
+  interaction: ButtonInteraction,
+  musicService: MusicService,
+  client: Client
+) {
   if (!interaction.guildId || !interaction.guild) {
     await interaction.reply({
       content: "ปุ่มนี้ใช้ได้เฉพาะภายในเซิร์ฟเวอร์",
@@ -349,7 +402,9 @@ async function handleControlButton(interaction: ButtonInteraction) {
       const paused = await musicService.togglePause(interaction.guildId);
       const presentation = buildQueuePresentation(
         interaction.guildId,
-        interaction.guild
+        interaction.guild,
+        musicService,
+        client
       );
     await interaction.update({
       embeds: presentation.embeds,
@@ -373,7 +428,9 @@ async function handleControlButton(interaction: ButtonInteraction) {
       await musicService.skip(interaction.guildId);
       const presentation = buildQueuePresentation(
         interaction.guildId,
-        interaction.guild
+        interaction.guild,
+        musicService,
+        client
       );
       await interaction.update({
         embeds: presentation.embeds,
@@ -389,7 +446,9 @@ async function handleControlButton(interaction: ButtonInteraction) {
       await musicService.stop(interaction.guildId);
       const presentation = buildQueuePresentation(
         interaction.guildId,
-        interaction.guild
+        interaction.guild,
+        musicService,
+        client
       );
       await interaction.update({
         embeds: presentation.embeds,
@@ -404,7 +463,9 @@ async function handleControlButton(interaction: ButtonInteraction) {
     case ControlButtons.QUEUE: {
       const presentation = buildQueuePresentation(
         interaction.guildId,
-        interaction.guild
+        interaction.guild,
+        musicService,
+        client
       );
       await interaction.update({
         embeds: presentation.embeds,
@@ -425,7 +486,9 @@ async function handleControlButton(interaction: ButtonInteraction) {
       await musicService.shuffle(interaction.guildId);
       const presentation = buildQueuePresentation(
         interaction.guildId,
-        interaction.guild
+        interaction.guild,
+        musicService,
+        client
       );
       await interaction.update({
         embeds: presentation.embeds,
@@ -441,7 +504,9 @@ async function handleControlButton(interaction: ButtonInteraction) {
       const mode = musicService.cycleLoopMode(interaction.guildId);
       const presentation = buildQueuePresentation(
         interaction.guildId,
-        interaction.guild
+        interaction.guild,
+        musicService,
+        client
       );
       await interaction.update({
         embeds: presentation.embeds,
@@ -467,7 +532,9 @@ async function handleControlButton(interaction: ButtonInteraction) {
         musicService.setAutoplay(interaction.guildId, { enabled: false });
         const presentation = buildQueuePresentation(
           interaction.guildId,
-          interaction.guild
+          interaction.guild,
+          musicService,
+          client
         );
         await interaction.update({
           embeds: presentation.embeds,
@@ -536,7 +603,11 @@ async function handleControlButton(interaction: ButtonInteraction) {
   }
 }
 
-async function handleModalSubmit(interaction: ModalSubmitInteraction) {
+async function handleModalSubmit(
+  interaction: ModalSubmitInteraction,
+  musicService: MusicService,
+  client: Client
+) {
   if (!interaction.guildId || !interaction.guild) {
     await interaction.reply({
       content: "โมดอลนี้ใช้ได้เฉพาะภายในเซิร์ฟเวอร์",
@@ -567,7 +638,9 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
           interaction.channelId ?? "",
           messageId,
           interaction.guildId,
-          interaction.guild
+          interaction.guild,
+          musicService,
+          client
         );
         await interaction.reply({
           content: `🔊 ปรับระดับเสียงเป็น ${parsed}% แล้ว`,
@@ -617,7 +690,9 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
           interaction.channelId ?? "",
           messageId,
           interaction.guildId,
-          interaction.guild
+          interaction.guild,
+          musicService,
+          client
         );
         await interaction.reply({
           content: `🎲 เปิด Autoplay แล้ว (แนว ${AUTOPLAY_GENRE_LABELS[genre]})`,
@@ -675,7 +750,9 @@ type QueuePresentation = {
 
 function buildQueuePresentation(
   guildId: string,
-  guild?: Guild | null
+  guild: Guild | null | undefined,
+  musicService: MusicService,
+  client: Client
 ): QueuePresentation {
   const queue = musicService.getQueue(guildId);
 
@@ -726,7 +803,7 @@ function buildQueuePresentation(
       embed.setThumbnail(current.info.artworkUrl);
     }
 
-    const requesterAvatarUrl = getRequesterAvatarUrl(current.requester);
+    const requesterAvatarUrl = getRequesterAvatarUrl(current.requester, client);
     if (current.requester) {
       footerText = `ขอโดย ${current.requester.name}`;
       footerIcon = requesterAvatarUrl;
@@ -879,7 +956,9 @@ async function updateDashboardMessage(
   channelId: string,
   messageId: string,
   guildId: string,
-  guild: Guild | null
+  guild: Guild | null,
+  musicService: MusicService,
+  client: Client
 ) {
   if (!channelId || !messageId) return;
   const channel =
@@ -892,7 +971,7 @@ async function updateDashboardMessage(
   const message = await channel.messages.fetch(messageId).catch(() => null);
   if (!message) return;
 
-  const presentation = buildQueuePresentation(guildId, guild ?? undefined);
+  const presentation = buildQueuePresentation(guildId, guild ?? undefined, musicService, client);
   await message.edit({
     embeds: presentation.embeds,
     components: presentation.components
@@ -909,7 +988,7 @@ function normalizeGenreInput(value: string) {
   return value.replace(/[\s_\-]+/g, "").toLowerCase();
 }
 
-function getRequesterAvatarUrl(requester?: QueueRequester) {
+function getRequesterAvatarUrl(requester: QueueRequester | undefined, client: Client) {
   if (!requester?.id || requester.id === "autoplay") return undefined;
   const user: User | undefined =
     client.users.cache.get(requester.id) ?? undefined;

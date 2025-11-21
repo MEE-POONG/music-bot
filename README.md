@@ -81,7 +81,53 @@ Stop the stack with `docker compose down`.
 - `src/routes/music.ts` – REST endpoints for controlling playback.
 - `lavalink/application.yml` – Lavalink server configuration mounted in Docker.
 
+### Multi-Bot Support 🤖
+
+ระบบรองรับการทำงานหลาย Discord bots พร้อมกัน โดยดึงข้อมูล `CLIENT_ID`, `TOKEN`, และ `GUILD_ID` จาก MongoDB Database
+
+#### Database Models
+- **MusicBotDB** - เก็บข้อมูล Music Bot แต่ละตัว (clientId, token, status, maxGuilds)
+- **ServerMusicBotDB** - Junction table เชื่อม Guild กับ Bot (serverId, musicBotId, status)
+
+#### Setup Multi-Bot System
+
+1. **Setup MongoDB**
+```bash
+# ใน .env
+DATABASE_URL="mongodb://localhost:27017/music-bot"
+```
+
+2. **Generate Prisma Client**
+```bash
+bunx prisma generate
+```
+
+3. **Add Bots to Database**
+```bash
+# Copy template และแก้ไขข้อมูล
+cp prisma/seed-music-bots-example.ts prisma/seed-music-bots-custom.ts
+
+# แก้ไข CLIENT_ID และ TOKEN ใน seed file
+# จากนั้นรัน:
+bun run prisma/seed-music-bots-custom.ts
+```
+
+4. **Deploy Commands ให้ทุก Bots**
+```bash
+bun run deploy:commands                    # Deploy ทุก bots
+bun run deploy:commands [CLIENT_ID]        # Deploy bot เฉพาะ
+bun run deploy:commands [CLIENT_ID] [GUILD_ID]  # Guild-specific
+```
+
+5. **Start Bot System**
+```bash
+bun run dev
+```
+
+ดูคู่มือละเอียดได้ที่: **[docs/SETUP_MULTI_BOTS.md](docs/SETUP_MULTI_BOTS.md)**
+
 ### Notes
 - Lavalink requires outbound internet connectivity to fetch tracks from sources (YouTube, etc.).
 - For production deployment, consider tightening the Lavalink password, running the HTTP API behind authentication, and persisting Lavalink logs/metrics.
 - หากปรับแก้คำสั่ง Slash ให้รัน `bun run deploy:commands` อีกครั้งเพื่ออัปเดตคำสั่งบน Discord
+- 🔒 **Security**: อย่า commit ไฟล์ `seed-music-bots-custom.ts` ที่มี token จริงเข้า git!
