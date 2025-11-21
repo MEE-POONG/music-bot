@@ -115,3 +115,62 @@ export async function activateBotInGuild(guildId: string, clientId: string) {
   });
 }
 
+// ฟังก์ชันเช็ค package และจำนวน bot ที่ใช้ได้
+export async function checkGuildMusicBotLimits(guildId: string) {
+  // ดึงข้อมูล server
+  const server = await prisma.serverDB.findUnique({
+    where: {
+      serverId: guildId
+    }
+  });
+
+  // ถ้าไม่มีข้อมูล server ให้อนุญาต (default)
+  if (!server) {
+    return {
+      allowed: true,
+      reason: null,
+      packageExpired: false,
+      botsExceeded: false,
+      currentBots: 0,
+      maxBots: 1
+    };
+  }
+
+  // เช็คว่า package หมดอายุหรือไม่
+  const now = new Date();
+  const packageExpired = server.openUntilAt < now;
+
+  // นับจำนวน bot ที่ active ใน guild นี้
+  const activeBots = await prisma.serverMusicBotDB.count({
+    where: {
+      serverId: guildId,
+      status: "ACTIVE"
+    }
+  });
+
+  const botsExceeded = activeBots >= server.maxMusicBots;
+
+  return {
+    allowed: !packageExpired && !botsExceeded,
+    reason: packageExpired
+      ? "Package หมดอายุแล้ว"
+      : botsExceeded
+        ? `จำนวน Music Bot เกินจำนวนที่อนุญาต (${activeBots}/${server.maxMusicBots})`
+        : null,
+    packageExpired,
+    botsExceeded,
+    currentBots: activeBots,
+    maxBots: server.maxMusicBots,
+    expiryDate: server.openUntilAt
+  };
+}
+
+// ฟังก์ชันดึง Server ตาม Guild ID
+export async function getServerByGuildId(guildId: string) {
+  return await prisma.serverDB.findUnique({
+    where: {
+      serverId: guildId
+    }
+  });
+}
+

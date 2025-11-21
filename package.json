@@ -12,7 +12,8 @@
     "clear:commands": "bun run src/scripts/clear-commands.ts",
     "prisma:generate": "bunx prisma generate",
     "prisma:studio": "bunx prisma studio",
-    "seed:bots": "bun run prisma/seed-music-bots-custom.ts"
+    "seed:bots": "bun run prisma/seed-music-bots-custom.ts",
+    "package:update": "bun run src/scripts/update-server-package.ts"
   },
   "dependencies": {
     "discord.js": "^14.15.3",
