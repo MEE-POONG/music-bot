@@ -1,4 +1,5 @@
 import type { Client } from "discord.js";
+import { REST, Routes } from "discord.js";
 import { createDiscordClient } from "../discord/client";
 import type { AppConfig } from "../config";
 import type { MusicService } from "../services/musicService";
@@ -8,6 +9,7 @@ import {
   updateBotGuildCount,
   prisma
 } from "./database";
+import { commandData } from "../discord/commands";
 
 export interface BotInstance {
   clientId: string;
@@ -124,6 +126,26 @@ export class BotManager {
         this.guildToBotMap.set(guild.id, clientId);
       } catch (error) {
         console.error(`[Bot:${name}] ไม่สามารถบันทึก guild assignment:`, error);
+      }
+
+      // Auto deploy slash commands ให้ guild ใหม่
+      try {
+        console.log(`[Bot:${name}] 🔧 กำลัง auto deploy slash commands ให้ ${guild.name}...`);
+        
+        const botInstance = this.bots.get(clientId);
+        if (!botInstance) {
+          console.error(`[Bot:${name}] ไม่พบ bot instance สำหรับ auto deploy`);
+          return;
+        }
+
+        const rest = new REST({ version: "10" }).setToken(botInstance.token);
+        const route = Routes.applicationGuildCommands(clientId, guild.id);
+
+        await rest.put(route, { body: commandData });
+
+        console.log(`[Bot:${name}] ✅ Auto deploy slash commands สำเร็จ (${commandData.length} คำสั่ง)`);
+      } catch (error) {
+        console.error(`[Bot:${name}] ❌ Auto deploy slash commands ล้มเหลว:`, error);
       }
     });
 
