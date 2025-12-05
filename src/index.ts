@@ -212,7 +212,7 @@ async function handlePlay(
   musicService: MusicService,
   client: Client
 ) {
-  await interaction.deferReply();
+  await interaction.deferReply({ ephemeral: true });
 
   const member =
     interaction.member instanceof GuildMember
